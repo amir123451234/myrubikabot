@@ -539,3 +539,4 @@ if __name__ == "__main__":
             asyncio.run(bot.run())
         except Exception as e:
             logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
+
