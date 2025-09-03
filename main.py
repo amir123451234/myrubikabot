@@ -5,7 +5,7 @@ import sqlite3
 import re
 import random
 from datetime import datetime, timedelta
-from rubika.client import Client
+from rubpy import Client
 import google.generativeai as genai
 from dotenv import load_dotenv
 
@@ -539,4 +539,5 @@ if __name__ == "__main__":
             asyncio.run(bot.run())
         except Exception as e:
             logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
+
 
