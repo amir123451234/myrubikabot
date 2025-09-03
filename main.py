@@ -191,7 +191,7 @@ class AIBot:
                     await self.client.delete_messages(message.object_guid, [message.message_id])
                     # ارسال پیام به کاربر
                     await self.client.send_message(
-                        message.object_guid, 
+                        message.object_guid,
                         f"**{message.author_name}** عزیز، ارسال لینک در این گروه ممنوع است.❌"
                     )
                     return # جلوگیری از ادامه پردازش پیام
@@ -202,9 +202,8 @@ class AIBot:
         async def on_callback_query(callback_query: Client.CallbackQuery):
             await self.handle_callback_query(callback_query)
 
-from rubpy.types import Update
-async def handle_message(self, message: Update):   
-    try:
+    async def handle_message(self, message: Client.Message):
+        try:
             author_guid = message.author_guid
             text = message.text
             
@@ -308,14 +307,13 @@ async def handle_message(self, message: Update):
                 # Process message as an AI prompt if it's not a command.
                 message.text = f"/ai {text}"
                 user_data = self.db_manager.get_user(author_guid)
-    try:
-        await self.handle_ai_command(message, message.text, user_data)
-    except Exception as e:
-        logger.error(f"Error processing message: {e}", exc_info=True)
-        await self.client.send_message(message.object_guid, "یک خطای ناشناخته رخ داد. لطفا دوباره تلاش کنید.")
-   
+                await self.handle_ai_command(message, message.text, user_data)
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
+            await self.client.send_message(message.object_guid, "یک خطای ناشناخته رخ داد. لطفا دوباره تلاش کنید.")
+
     async def handle_callback_query(self, callback_query: Client.CallbackQuery):
-          try:
+        try:
             data = callback_query.data
             sender_guid = callback_query.sender_guid
             sender_name = callback_query.sender_name
@@ -351,7 +349,7 @@ async def handle_message(self, message: Update):
             
             # Check for user callbacks
             if data == 'about':
-                response = "🤖 من یک ربات هوش مصنوعی هستم که به سوالات شما پاسخ می‌دهم و در کارهای مختلف به شما کمک می‌کنم.\n\nبرای ارتباط با من یا پیشنهاد قابلیت جدید، به ادمین اصلی پیام بدهید: **@What0001** 🚀"
+                response = " 🤖  من یک ربات هوش مصنوعی هستم که به سوالات شما پاسخ می‌دهم و در کارهای مختلف به شما کمک می‌کنم.\n\nبرای ارتباط با من یا پیشنهاد قابلیت جدید، به ادمین اصلی پیام بدهید: **@What0001** 🚀 "
                 await self.client.send_message(sender_guid, response)
             elif data == 'vip_request':
                 response = "برای اطلاعات بیشتر در مورد عضویت VIP، لطفا به ادمین پیام بدهید."
@@ -541,11 +539,3 @@ if __name__ == "__main__":
             asyncio.run(bot.run())
         except Exception as e:
             logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
-
-
-
-
-
-
-
-
