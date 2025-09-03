@@ -5,7 +5,8 @@ import sqlite3
 import re
 import random
 from datetime import datetime, timedelta
-from rubpy import Client, Update
+from rubpy import Client
+from rubpy.types import Update
 import google.generativeai as genai
 from dotenv import load_dotenv
 
