@@ -1,4 +1,4 @@
 rubika-bot-api
 google-generativeai
 python-dotenv
-
+rubpy
