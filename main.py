@@ -6,6 +6,7 @@ import re
 import random
 from datetime import datetime, timedelta
 from rubpy import Client
+from rubpy.types import Update
 import google.generativeai as genai
 from dotenv import load_dotenv
 
@@ -178,7 +179,7 @@ class AIBot:
 
     def _setup_event_handlers(self):
         @self.client.on(event_type=self.client.MessageEvents.New)
-        async def on_message(message: Client.Message):
+        async def on_message(message: Update):
             # بررسی اینکه پیام در یک گروه است و فرستنده ادمین نیست.
             is_master_admin = (message.author_guid == self.master_admin_guid)
             is_group_chat = message.object_guid.startswith('g')
@@ -192,25 +193,25 @@ class AIBot:
                     # ارسال پیام به کاربر
                     await self.client.send_message(
                         message.object_guid,
-                        f"**{message.author_name}** عزیز، ارسال لینک در این گروه ممنوع است.❌"
+                        f"**{message.author_name}** عزیز، ارسال لینک در این گروه ممنوع است. ❌ "
                     )
                     return # جلوگیری از ادامه پردازش پیام
             
             await self.handle_message(message)
 
         @self.client.on(event_type=self.client.MessageEvents.CallbackQuery)
-        async def on_callback_query(callback_query: Client.CallbackQuery):
+        async def on_callback_query(callback_query: Update):
             await self.handle_callback_query(callback_query)
-
-    async def handle_message(self, message: Client.Message):
+            
+    async def handle_message(self, message: Update):
         try:
             author_guid = message.author_guid
             text = message.text
-            
+
             # Check for admin states
             if author_guid in self.admin_states:
                 state = self.admin_states[author_guid]['state']
-                
+
                 if state == 'add_vip_duration':
                     try:
                         duration_days = int(text.strip())
@@ -233,13 +234,13 @@ class AIBot:
                     else:
                         await self.client.send_message(message.object_guid, "لطفا روی پیام کاربر مورد نظر ریپلای کنید.")
                     return
-                
+
                 elif state == 'waiting_for_ad_text':
                     self.admin_states[author_guid]['ad_text'] = text
                     self.admin_states[author_guid]['state'] = 'waiting_for_ad_time'
                     await self.client.send_message(message.object_guid, "حالا زمان ارسال تبلیغ را وارد کنید. (مثال: 1402/10/20 18:30)")
                     return
-                
+
                 elif state == 'waiting_for_ad_time':
                     try:
                         ad_time_str = text.strip()
@@ -252,7 +253,7 @@ class AIBot:
                     except ValueError:
                         await self.client.send_message(message.object_guid, "فرمت تاریخ و ساعت اشتباه است. لطفاً به این شکل وارد کنید: 1402/10/20 18:30")
                         return
-
+                
                 elif state == 'waiting_for_admin_username':
                     username = text.strip().replace('@', '')
                     try:
@@ -270,7 +271,7 @@ class AIBot:
                     finally:
                         del self.admin_states[author_guid]
                     return
-                
+
                 elif state == 'waiting_for_admin_to_remove':
                     if message.reply_to_message_id:
                         replied_msg = await self.client.get_messages_by_id(message.object_guid, [message.reply_to_message_id])
@@ -312,7 +313,7 @@ class AIBot:
             logger.error(f"Error processing message: {e}", exc_info=True)
             await self.client.send_message(message.object_guid, "یک خطای ناشناخته رخ داد. لطفا دوباره تلاش کنید.")
 
-    async def handle_callback_query(self, callback_query: Client.CallbackQuery):
+    async def handle_callback_query(self, callback_query: Update):
         try:
             data = callback_query.data
             sender_guid = callback_query.sender_guid
@@ -386,7 +387,6 @@ class AIBot:
             if not user_data:
                 await self.client.send_message(message.object_guid, "مشکلی در شناسایی کاربر رخ داده است.")
                 return
-
         is_vip = user_data[3]
         vip_expiry = user_data[4]
         
