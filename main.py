@@ -5,8 +5,7 @@ import sqlite3
 import re
 import random
 from datetime import datetime, timedelta
-from rubpy import Client
-from rubpy.types import Update
+from rubpy import Client, Update
 import google.generativeai as genai
 from dotenv import load_dotenv
 
@@ -165,7 +164,6 @@ class AIBot:
         self.master_password = master_password
         self.sub_admin_password = sub_admin_password
         self.db_manager = DBManager(DB_PATH)
-        self._setup_event_handlers()
         self.db_manager.add_admin(self.master_admin_guid, is_master=True)
         self.waiting_for_password = {}
         self.admin_states = {}
@@ -177,32 +175,6 @@ class AIBot:
         }
         logger.info("AI bot handler initialized and ready.")
 
-    def _setup_event_handlers(self):
-        @self.client.on(event_type=self.client.MessageEvents.New)
-        async def on_message(message: Update):
-            # بررسی اینکه پیام در یک گروه است و فرستنده ادمین نیست.
-            is_master_admin = (message.author_guid == self.master_admin_guid)
-            is_group_chat = message.object_guid.startswith('g')
-
-            if is_group_chat and not is_master_admin:
-                # بررسی وجود لینک در متن پیام
-                has_link = re.search(r'https?://|rubika\.ir|@', message.text or '', re.IGNORECASE)
-                if has_link:
-                    # حذف پیام
-                    await self.client.delete_messages(message.object_guid, [message.message_id])
-                    # ارسال پیام به کاربر
-                    await self.client.send_message(
-                        message.object_guid,
-                        f"**{message.author_name}** عزیز، ارسال لینک در این گروه ممنوع است. ❌ "
-                    )
-                    return # جلوگیری از ادامه پردازش پیام
-            
-            await self.handle_message(message)
-
-        @self.client.on(event_type=self.client.MessageEvents.CallbackQuery)
-        async def on_callback_query(callback_query: Update):
-            await self.handle_callback_query(callback_query)
-            
     async def handle_message(self, message: Update):
         try:
             author_guid = message.author_guid
@@ -525,7 +497,7 @@ class AIBot:
         try:
             logger.info("Starting the Rubika AI bot...")
             asyncio.create_task(self.run_ads_scheduler())
-            await self.client.run()
+            await self.client.run(self.handle_message, self.handle_callback_query)
         except Exception as e:
             logger.error(f"Bot failed to start: {e}", exc_info=True)
 
