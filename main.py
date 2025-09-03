@@ -308,11 +308,11 @@ async def handle_message(self, message: Update):
                 # Process message as an AI prompt if it's not a command.
                 message.text = f"/ai {text}"
                 user_data = self.db_manager.get_user(author_guid)
-            try:  
-                await self.handle_ai_command(message, message.text, user_data)
-            except Exception as e:
-                logger.error(f"Error processing message: {e}", exc_info=True)
-                await self.client.send_message(message.object_guid, "یک خطای ناشناخته رخ داد. لطفا دوباره تلاش کنید.")
+     try:  
+         await self.handle_ai_command(message, message.text, user_data)
+     except Exception as e:
+         logger.error(f"Error processing message: {e}", exc_info=True)
+         await self.client.send_message(message.object_guid, "یک خطای ناشناخته رخ داد. لطفا دوباره تلاش کنید.")
 
     async def handle_callback_query(self, callback_query: Client.CallbackQuery):
           try:
@@ -541,6 +541,7 @@ if __name__ == "__main__":
             asyncio.run(bot.run())
         except Exception as e:
             logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
+
 
 
 
