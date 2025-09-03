@@ -72,7 +72,7 @@ class DBManager:
                 is_master INTEGER DEFAULT 0
             )''')
             conn.execute('''CREATE TABLE IF NOT EXISTS ads (
-                id INTEGER INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 text TEXT,
                 run_at REAL
             )''')
