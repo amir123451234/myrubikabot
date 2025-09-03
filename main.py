@@ -202,8 +202,9 @@ class AIBot:
         async def on_callback_query(callback_query: Client.CallbackQuery):
             await self.handle_callback_query(callback_query)
 
-    async def handle_message(self, message: Client.Message):
-        try:
+from rubpy.types import Update
+async def handle_message(self, message: Update):   
+    try:
             author_guid = message.author_guid
             text = message.text
             
@@ -539,5 +540,6 @@ if __name__ == "__main__":
             asyncio.run(bot.run())
         except Exception as e:
             logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
+
 
 
