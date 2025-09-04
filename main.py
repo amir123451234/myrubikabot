@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 # Rubika SDK (pyrubi)
 # ---------------------------------------------------------------------
 from pyrubi import Client
-from rubpy.types import Update  # این خط از rubpy استفاده می‌کند و باید باقی بماند
+from pyrubi.types import Update  # این خط از pyrubi استفاده می‌کند
 
 # ---------------------------------------------------------------------
 # Google Generative AI (Gemini) — اختیاری ولی توصیه‌شده
