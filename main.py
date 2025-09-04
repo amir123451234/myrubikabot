@@ -15,21 +15,10 @@ from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------
-# Persian (Jalali) date parsing (اختیاری)
+# Rubika SDK (pyrubi)
 # ---------------------------------------------------------------------
 from pyrubi import Client
-
-# ---------------------------------------------------------------------
-# Rubika SDK (rubpy)
-# ---------------------------------------------------------------------
-try:
-    from rubpy import Client  # type: ignore
-    from rubpy.types import Update  # type: ignore
-    HAS_RUBPY = True
-except Exception:  # pragma: no cover
-    HAS_RUBPY = False
-    Client = object  # type: ignore
-    Update = object  # type: ignore
+from rubpy.types import Update  # این خط از rubpy استفاده می‌کند و باید باقی بماند
 
 # ---------------------------------------------------------------------
 # Google Generative AI (Gemini) — اختیاری ولی توصیه‌شده
@@ -83,7 +72,7 @@ else:
 # =============================
 async def generate_response(prompt: str, user_type: str) -> str:
     """تولید پاسخ با Gemini؛ در صورت نبودن کلید، پیام مناسب برمی‌گرداند."""
-    if not (HAS_GENAI and _model):
+    if not _model:
         return "سرویس هوش مصنوعی در دسترس نیست. لطفاً بعداً دوباره تلاش کنید."
 
     try:
@@ -330,12 +319,7 @@ class AIBot:
     def _parse_datetime(self, text: str) -> float:
         """پارس تاریخ/ساعت. پشتیبانی از جلالی در صورت نصب persiantools."""
         text = text.strip()
-        if HAS_PERSIAN_DATE:
-            try:
-                jdt = JalaliDateTime.strptime(text, "%Y/%m/%d %H:%M")
-                return jdt.to_gregorian().timestamp()
-            except Exception:
-                pass
+        # بلوک مربوط به persiantools حذف شد
         dt = datetime.strptime(text, "%Y/%m/%d %H:%M")
         return dt.timestamp()
 
@@ -563,7 +547,7 @@ class AIBot:
         await self.show_user_menu(getattr(message, "author_guid", None))
 
     async def handle_ai_command(self, message: Update, text: str, user_data):
-        if not (HAS_GENAI and _model):
+        if not _model:
             await self._safe_send(getattr(message, "object_guid", None), "سرویس هوش مصنوعی غیرفعال است.")
             return
 
@@ -593,7 +577,7 @@ class AIBot:
         await self._safe_send(getattr(message, "object_guid", None), response_text)
 
     async def handle_summarize_command(self, message: Update, text: str, user_data):
-        if not (HAS_GENAI and _model):
+        if not _model:
             await self._safe_send(getattr(message, "object_guid", None), "سرویس هوش مصنوعی غیرفعال است.")
             return
 
@@ -723,87 +707,31 @@ class AIBot:
                                 logger.info(f"Ad sent to user: {guid}")
                             except Exception as e:  # pragma: no cover
                                 logger.error(f"Failed to send ad to {guid}: {e}")
+                        
                         self.db.delete_ad(ad_id)
+
                 await asyncio.sleep(10)
-            except Exception as e:  # pragma: no cover
-                logger.error(f"run_ads_scheduler loop error: {e}")
-                await asyncio.sleep(5)
+            except Exception as e:
+                logger.error(f"Error in ads scheduler: {e}", exc_info=True)
+                await asyncio.sleep(10)
+
+    async def run(self):
+        try:
+            logger.info("Starting the Rubika AI bot...")
+            asyncio.create_task(self.run_ads_scheduler())
+            await self.client.run(self.on_update)
+        except Exception as e:
+            logger.error(f"Bot failed to start: {e}", exc_info=True)
 
 
-# =============================
-# 5) Bootstrap & Run
-# =============================
-async def main():
-    # چک اولیه متغیرهای ضروری
-    missing = []
-    for k, v in {
-        "RUBIKA_AUTH_KEY": AUTH_KEY,
-        "MASTER_ADMIN_GUID": MASTER_ADMIN_GUID,
-        "MASTER_PASSWORD": MASTER_PASSWORD,
-        "SUB_ADMIN_PASSWORD": SUB_ADMIN_PASSWORD,
-    }.items():
-        if not v:
-            missing.append(k)
-    if missing:
-        raise RuntimeError(f"لطفاً متغیرهای محیطی زیر را تنظیم کنید: {', '.join(missing)}")
-
-    if not HAS_RUBPY:
-        raise RuntimeError("کتابخانه rubpy نصب نشده است.")
-
-    # *** نکته حیاتی برای جلوگیری از prompt شماره‌تلفن (EOFError) ***
-    # استفاده صحیح از پارامترها:
-    #   - session: یک نام دلخواه برای ذخیره نشست (فایل محلی)
-    #   - auth:    کلید AUTH روبیکا
-    client = Client(auth=AUTH_KEY, name="rubika-bot")
-    bot = AIBot(
-        client=client,
-        channel_guid=CHANNEL_GUID,
-        master_admin_guid=MASTER_ADMIN_GUID,
-        master_password=MASTER_PASSWORD,
-        sub_admin_password=SUB_ADMIN_PASSWORD,
-    )
-
-    # شروع تسک زمان‌بندی تبلیغات
-    asyncio.create_task(bot.run_ads_scheduler())
-
-    # ------ ثبت هندلر عمومی آپدیت‌ها ------
-    # rubpy در نسخه‌های مختلف API رویداد دارد؛ این مسیر عمومی با on_update کار می‌کند.
-    # اگر کتابخانه شما متد "run" با callbackها را پشتیبانی کند از آن استفاده می‌کنیم؛
-    # در غیر این صورت از حلقه دریافت آپدیت استفاده می‌کنیم.
-    try:
-        # بعضی نسخه‌ها: client.run(message_handler, callback_handler)
-        # ما یک هندلر واحد می‌دهیم که خودش تشخیص می‌دهد پیام است یا کال‌بک:
-        logger.info("Starting the Rubika AI bot (run with handler)…")
-        client.run(bot.on_update)
-        return
-    except Exception as e:
-        logger.warning(f"client.run(handler) not supported: {e}. Falling back to polling loop…")
-
-    # --- FallBack: حلقه عمومی دریافت آپدیت‌ها (سازگار با نسخه‌هایی که run(handler) ندارند) ---
-    # بسته به نسخه rubpy نام و امضای روش دریافت آپدیت‌ها متفاوت است؛
-    # الگوی زیر دو حالت رایج را پوشش می‌دهد.
-    try:
-        # حالت context manager
-        async with client:
-            logger.info("Connected. Entering generic update loop…")
-            while True:
-                try:
-                    updates: List[Update] = await client.get_updates()  # بعضی نسخه‌ها
-                except AttributeError:
-                    # حالت دیگر: fetch از event queue داخلی
-                    updates = await client.listen()  # اگر متدی با این نام وجود داشته باشد
-                for upd in updates or []:
-                    await bot.on_update(upd)
-                await asyncio.sleep(0.5)
-    except Exception as e:
-        logger.error(f"Fatal loop error: {e}", exc_info=True)
-
-
+# --- بخش 5: نقطه ورود برنامه (Main Entry Point) ---
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as exc:
-        logger.error(f"Bot failed to start: {exc}", exc_info=True)
-
-
-
+    if not all([AUTH_KEY, MASTER_ADMIN_GUID, MASTER_PASSWORD, SUB_ADMIN_PASSWORD]):
+        logger.error("All required environment variables must be set in the .env file.")
+    else:
+        try:
+            client = Client(session="rubika-bot", auth=AUTH_KEY)
+            bot = AIBot(client, CHANNEL_GUID, MASTER_ADMIN_GUID, MASTER_PASSWORD, SUB_ADMIN_PASSWORD)
+            asyncio.run(bot.run())
+        except Exception as e:
+            logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
