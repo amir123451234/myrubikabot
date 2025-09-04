@@ -22,7 +22,7 @@ DB_PATH = "ai_bot_db.db"
 
 genai.configure(api_key=GEMINI_API_KEY)
 generation_config = {
-    "temperature": 0.9,
+  
     "top_p": 1,
     "top_k": 1,
     "max_output_tokens": 2048,
@@ -512,3 +512,4 @@ if __name__ == "__main__":
             bot.run()
         except Exception as e:
             logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
+
