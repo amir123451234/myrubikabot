@@ -758,7 +758,7 @@ async def main():
     # استفاده صحیح از پارامترها:
     #   - session: یک نام دلخواه برای ذخیره نشست (فایل محلی)
     #   - auth:    کلید AUTH روبیکا
-    client = Client(auth=AUTH_KEY)
+    client = Client(auth=AUTH_KEY, name="rubika-bot")
     bot = AIBot(
         client=client,
         channel_guid=CHANNEL_GUID,
@@ -808,4 +808,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as exc:
         logger.error(f"Bot failed to start: {exc}", exc_info=True)
+
 
