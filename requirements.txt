@@ -1,7 +1,6 @@
-rubpy==7.1.20
+pyrubi
 requests==2.32.5
 python-dotenv==1.1.1
 beautifulsoup4==4.13.5
 aiohttp==3.12.15
 pydantic==2.11.7
-
