@@ -1,4 +1,6 @@
-rubpy
-google-generativeai
-python-dotenv
-persiantools
+rubpy==7.1.23
+requests==2.32.5
+python-dotenv==1.1.1
+beautifulsoup4==4.13.5
+aiohttp==3.12.15
+pydantic==2.11.7
