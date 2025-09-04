@@ -17,11 +17,7 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------
 # Persian (Jalali) date parsing (اختیاری)
 # ---------------------------------------------------------------------
-try:
-    from persiantools.jdatetime import JalaliDateTime  # type: ignore
-    HAS_PERSIAN_DATE = True
-except Exception:  # pragma: no cover
-    HAS_PERSIAN_DATE = False
+from pyrubi import Client
 
 # ---------------------------------------------------------------------
 # Rubika SDK (rubpy)
@@ -808,5 +804,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except Exception as exc:
         logger.error(f"Bot failed to start: {exc}", exc_info=True)
+
 
 
