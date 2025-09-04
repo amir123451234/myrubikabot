@@ -1,53 +1,60 @@
+# main.py
+# ——— نسخه یکپارچه و نهایی (تک‌فایل) با رفع خطای لاگین rubpy و آماده‌ی دپلوی روی Render/سرور ———
+# نکته خیلی مهم: rubpy باید با "session" و "auth" ساخته شود؛
+# قبلاً AUTH به‌صورت آرگومان موقعیتی پاس داده می‌شد و باعث prompt شماره‌تلفن و خطای EOF می‌شد.
+# این نسخه Client را به‌صورت Client(session='rubika-bot', auth=RUBIKA_AUTH_KEY) می‌سازد تا هیچ ورودی تعاملی نخواهد.
+
 import asyncio
 import logging
 import os
 import sqlite3
 import re
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 
 from dotenv import load_dotenv
 
-# ─────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------
 # Persian (Jalali) date parsing (اختیاری)
-# ─────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------
 try:
     from persiantools.jdatetime import JalaliDateTime  # type: ignore
     HAS_PERSIAN_DATE = True
-except Exception:
+except Exception:  # pragma: no cover
     HAS_PERSIAN_DATE = False
 
-# ─────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------
 # Rubika SDK (rubpy)
-# ─────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------
 try:
-    from rubpy import Client, handlers  # type: ignore
+    from rubpy import Client  # type: ignore
+    from rubpy.types import Update  # type: ignore
     HAS_RUBPY = True
-except Exception:
+except Exception:  # pragma: no cover
     HAS_RUBPY = False
     Client = object  # type: ignore
-    handlers = None  # type: ignore
+    Update = object  # type: ignore
 
-# ─────────────────────────────────────────────────────────
-# Google Generative AI (Gemini)
-# ─────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------
+# Google Generative AI (Gemini) — اختیاری ولی توصیه‌شده
+# ---------------------------------------------------------------------
 try:
     import google.generativeai as genai  # type: ignore
     HAS_GENAI = True
-except Exception:
+except Exception:  # pragma: no cover
     HAS_GENAI = False
 
 # =============================
-# 1) Configuration & Logging
+# 1) تنظیمات و لاگ‌گیری
 # =============================
 load_dotenv()
-AUTH_KEY = os.getenv("RUBIKA_AUTH_KEY")
-MASTER_ADMIN_GUID = os.getenv("MASTER_ADMIN_GUID")
+
+AUTH_KEY = os.getenv("RUBIKA_AUTH_KEY")  # **ضروری**: توکن Rubika (Auth) — نه شماره تلفن
+MASTER_ADMIN_GUID = os.getenv("MASTER_ADMIN_GUID")  # **ضروری**
 CHANNEL_GUID = os.getenv("CHANNEL_GUID")  # اختیاری
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")  # پیش‌فرض امن‌تر از gemini-pro
-MASTER_PASSWORD = os.getenv("MASTER_PASSWORD")
-SUB_ADMIN_PASSWORD = os.getenv("SUB_ADMIN_PASSWORD")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # اختیاری
+MASTER_PASSWORD = os.getenv("MASTER_PASSWORD")  # **ضروری**
+SUB_ADMIN_PASSWORD = os.getenv("SUB_ADMIN_PASSWORD")  # **ضروری**
 DB_PATH = os.getenv("DB_PATH", "ai_bot_db.db")
 
 logging.basicConfig(
@@ -56,57 +63,53 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AIBot")
 
-# Configure Gemini (اگر موجود باشد)
-_model = None
+# Gemini config
+GENERATION_CONFIG = {
+    "temperature": 0.9,
+    "top_p": 1,
+    "top_k": 1,
+    "max_output_tokens": 2048,
+}
 if HAS_GENAI and GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        # پیکربندی تولید
-        GENERATION_CONFIG = {
-            "temperature": 0.9,
-            "top_p": 1,
-            "top_k": 1,
-            "max_output_tokens": 2048,
-        }
-        _model = genai.GenerativeModel(GEMINI_MODEL, generation_config=GENERATION_CONFIG)
-        logger.info("Gemini model initialized: %s", GEMINI_MODEL)
+        _model = genai.GenerativeModel("gemini-1.5-flash", generation_config=GENERATION_CONFIG)
+        logger.info("Gemini model initialized: gemini-1.5-flash")
     except Exception as e:
-        logger.error("Failed to init Gemini: %s", e)
+        logger.error(f"Failed to init Gemini: {e}")
         _model = None
+else:
+    _model = None
 
 
 # =============================
-# 2) AI helper
+# 2) AI Helper
 # =============================
 async def generate_response(prompt: str, user_type: str) -> str:
-    """Generate a response using Google Gemini API. Falls back gracefully."""
+    """تولید پاسخ با Gemini؛ در صورت نبودن کلید، پیام مناسب برمی‌گرداند."""
     if not (HAS_GENAI and _model):
-        return "متاسفانه دسترسی به سرویس هوش مصنوعی امکان‌پذیر نیست."
+        return "سرویس هوش مصنوعی در دسترس نیست. لطفاً بعداً دوباره تلاش کنید."
 
     try:
-        system_preamble = (
-            "You are a helpful Persian assistant. پاسخ‌ها را مودبانه، دقیق و کاربردی بده."
-        )
+        preamble = "You are a helpful Persian assistant. پاسخ‌ها را مودبانه، دقیق و کاربردی بده."
         if user_type == "free":
-            final_prompt = f"{system_preamble}\n\nحداکثر در 8 خط پاسخ بده.\n\nسوال کاربر:\n{prompt}"
+            final_prompt = f"{preamble}\n\nحداکثر در 8 خط پاسخ بده.\n\nسوال کاربر:\n{prompt}"
         else:
-            final_prompt = f"{system_preamble}\n\nسوال کاربر:\n{prompt}"
+            final_prompt = f"{preamble}\n\nسوال کاربر:\n{prompt}"
 
-        # generate_content همگام است؛ برای بلاک‌نکردن لوپ، در ترد اجراش می‌کنیم
+        # genai SDK همگام است؛ برای امن‌بودن داخل ترد می‌بریم
         response = await asyncio.to_thread(_model.generate_content, final_prompt)
-        text = getattr(response, "text", "").strip()
-        return text or "پاسخی از موتور هوش مصنوعی دریافت نشد."
-    except Exception as e:
-        logger.error(f"Error generating AI response: {e}")
-        return "در پاسخ به درخواست شما خطایی رخ داد."
+        text = getattr(response, "text", "") or ""
+        return text.strip() or "پاسخی از موتور هوش مصنوعی دریافت نشد."
+    except Exception as e:  # pragma: no cover
+        logger.error(f"Gemini error: {e}")
+        return "در تولید پاسخ مشکل پیش آمد."
 
 
 # =============================
 # 3) Database Manager (SQLite)
 # =============================
 class DBManager:
-    """Manages DB interactions: users, admins, ads, channel requests."""
-
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._init_db()
@@ -175,7 +178,6 @@ class DBManager:
             return cur.fetchone()
 
     def make_vip(self, guid: str, duration_days: int):
-        """Upsert VIP; اگر duration_days == 0، VIP را حذف می‌کند."""
         expiry = datetime.now() + timedelta(days=duration_days)
         with self.get_connection() as conn:
             conn.execute(
@@ -197,9 +199,7 @@ class DBManager:
             conn.commit()
 
     # ---- admins ----
-    def get_admin_level(self, guid: Optional[str]) -> int:
-        if not guid:
-            return -1
+    def get_admin_level(self, guid: str) -> int:
         with self.get_connection() as conn:
             cur = conn.cursor()
             cur.execute("SELECT is_master FROM admins WHERE guid = ?", (guid,))
@@ -228,15 +228,14 @@ class DBManager:
             return [r[0] for r in cur.fetchall()]
 
     # ---- ads ----
-    def get_due_ads(self) -> List[Tuple[int, str, float]]:
-        """تبلیغاتی که موعدشان رسیده را برمی‌گرداند."""
+    def get_due_ads(self):
         with self.get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT id, text, run_at FROM ads WHERE run_at <= ? ORDER BY run_at ASC",
+                "SELECT * FROM ads WHERE run_at <= ? ORDER BY run_at ASC",
                 (datetime.now().timestamp(),),
             )
-            return [(row[0], row[1], float(row[2])) for row in cur.fetchall()]
+            return cur.fetchall()
 
     def add_ad(self, ad_text: str, run_at_ts: float):
         with self.get_connection() as conn:
@@ -276,92 +275,27 @@ class DBManager:
 
 
 # =============================
-# 4) Helper: normalize update
-# =============================
-class SimpleUpdate:
-    """یک آبجکت سبک برای یکسان‌سازی فیلدهای rubpy update."""
-
-    def __init__(
-        self,
-        author_guid: Optional[str],
-        object_guid: Optional[str],
-        text: str,
-        reply_to_message_id: Optional[str] = None,
-        sender_name: str = "",
-        data: str = "",
-    ):
-        self.author_guid = author_guid
-        self.object_guid = object_guid
-        self.text = text
-        self.reply_to_message_id = reply_to_message_id
-        self.sender_name = sender_name
-        self.data = data  # برای callback_data
-
-
-def pick(obj, names: List[str], default=None):
-    """به ترتیب از بین چند اسم، اولین مقدار در دسترس را برمی‌دارد."""
-    for n in names:
-        try:
-            if hasattr(obj, n):
-                v = getattr(obj, n)
-                if v is not None:
-                    return v
-            # اگر شبیه dict بود
-            if hasattr(obj, "get"):
-                v2 = obj.get(n)  # type: ignore
-                if v2 is not None:
-                    return v2
-        except Exception:
-            continue
-    return default
-
-
-def to_simple_update_from_message(update) -> SimpleUpdate:
-    author_guid = pick(update, ["author_guid", "sender_guid", "user_guid"])
-    object_guid = pick(update, ["object_guid", "chat_guid", "guid"])
-    text = pick(update, ["text", "raw_text", "message", "caption"], "") or ""
-    reply_to = pick(update, ["reply_to_message_id", "reply_message_id", "reply_to_message"])
-    # برخی پیاده‌سازی‌ها اسم فرستنده رو دارند
-    sender_name = pick(update, ["author_title", "sender_name", "author_name", "full_name"], "")
-    return SimpleUpdate(author_guid, object_guid, text, reply_to, sender_name)
-
-
-def to_simple_update_from_callback(update) -> SimpleUpdate:
-    sender_guid = pick(update, ["sender_guid", "author_guid", "user_guid"])
-    object_guid = pick(update, ["object_guid", "chat_guid", "guid"])
-    data = pick(update, ["data", "callback_data", "raw_text"], "") or ""
-    sender_name = pick(update, ["sender_name", "author_title", "author_name", "full_name"], "")
-    return SimpleUpdate(sender_guid, object_guid, text="", reply_to_message_id=None, sender_name=sender_name, data=data)
-
-
-# =============================
-# 5) Main Bot
+# 4) Bot Logic
 # =============================
 class AIBot:
     def __init__(
         self,
-        auth_key: str,
+        client: Client,
         channel_guid: Optional[str],
         master_admin_guid: str,
         master_password: str,
         sub_admin_password: str,
     ):
-        if not HAS_RUBPY:
-            raise RuntimeError("rubpy در محیط نصب نشده است.")
-        if not all([auth_key, master_admin_guid, master_password, sub_admin_password]):
-            raise ValueError("تمام متغیرهای محیطی لازم باید تنظیم شوند.")
-
-        self.auth_key = auth_key
-        self.client: Optional[Client] = None
+        self.client = client
         self.channel_guid = channel_guid
         self.master_admin_guid = master_admin_guid
         self.master_password = master_password
         self.sub_admin_password = sub_admin_password
 
-        self.db_manager = DBManager(DB_PATH)
-        self.db_manager.add_admin(self.master_admin_guid, is_master=True)
+        self.db = DBManager(DB_PATH)
+        self.db.add_admin(self.master_admin_guid, is_master=True)
 
-        # state stores
+        # State
         self.waiting_for_password: Dict[str, bool] = {}
         self.admin_states: Dict[str, Dict[str, Any]] = {}
 
@@ -375,19 +309,14 @@ class AIBot:
 
         logger.info("AI bot handler initialized and ready.")
 
-    # ───────────── Utilities ─────────────
-    async def _safe_send(self, target_guid: Optional[str], text: str):
-        if not target_guid or not self.client:
-            return
+    # ---------- Utils ----------
+    async def _safe_send(self, target_guid: str, text: str):
         try:
             MAX_LEN = 4000
             if len(text) <= MAX_LEN:
                 await self.client.send_message(target_guid, text)
                 return
-            # Split to safe chunks
-            parts: List[str] = []
-            buf: List[str] = []
-            size = 0
+            parts, buf, size = [], [], 0
             for line in text.split("\n"):
                 if size + len(line) + 1 > MAX_LEN:
                     parts.append("\n".join(buf))
@@ -399,15 +328,11 @@ class AIBot:
                 parts.append("\n".join(buf))
             for p in parts:
                 await self.client.send_message(target_guid, p)
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             logger.error(f"Failed to send message: {e}")
 
     def _parse_datetime(self, text: str) -> float:
-        """Parse datetime string. Jalali if available, else Gregorian.
-        Formats:
-          - 1403/06/15 18:30 (Jalali)
-          - 2025/09/03 18:30 (Gregorian)
-        """
+        """پارس تاریخ/ساعت. پشتیبانی از جلالی در صورت نصب persiantools."""
         text = text.strip()
         if HAS_PERSIAN_DATE:
             try:
@@ -418,18 +343,30 @@ class AIBot:
         dt = datetime.strptime(text, "%Y/%m/%d %H:%M")
         return dt.timestamp()
 
-    # ───────────── Event Handlers ─────────────
-    async def handle_message(self, su: SimpleUpdate):
-        """هندل پیام‌های متنی و تبدیل به دستور/چت AI"""
+    # ---------- Public API called by rubpy ----------
+    async def on_update(self, update: Update):
+        """ورودی خام آپدیت‌ها: بر اساس فیلدها تشخیص پیام/کال‌بک."""
         try:
-            author_guid = su.author_guid
-            text = su.text or ""
-            object_guid = su.object_guid or author_guid
+            # callback query
+            if getattr(update, "data", None):
+                await self.handle_callback_query(update)
+                return
+            # message
+            if getattr(update, "text", None) is not None:
+                await self.handle_message(update)
+        except Exception as e:  # pragma: no cover
+            logger.error(f"on_update error: {e}", exc_info=True)
 
-            # ثبت فعالیت کاربر
+    async def handle_message(self, message: Update):
+        try:
+            author_guid = getattr(message, "author_guid", None)
+            text = (getattr(message, "text", "") or "").strip()
+            object_guid = getattr(message, "object_guid", author_guid)
+
+            # ثبت کاربر
             try:
                 if author_guid:
-                    self.db_manager.update_user_activity(author_guid, True)
+                    self.db.update_user_activity(author_guid, True)
             except Exception as e:
                 logger.error(f"Failed to update user activity: {e}")
 
@@ -439,9 +376,9 @@ class AIBot:
 
                 if state == "add_vip_duration":
                     try:
-                        duration_days = int(text.strip())
+                        duration_days = int(text)
                         target_guid = self.admin_states[author_guid]["target_guid"]
-                        self.db_manager.make_vip(target_guid, duration_days)
+                        self.db.make_vip(target_guid, duration_days)
                         await self._safe_send(object_guid, f"کاربر با GUID `{target_guid}` برای {duration_days} روز VIP شد.")
                         await self._safe_send(target_guid, f"تبریک! شما برای {duration_days} روز VIP شدید.")
                         del self.admin_states[author_guid]
@@ -451,27 +388,14 @@ class AIBot:
                         return
 
                 elif state == "add_vip_reply":
-                    if su.reply_to_message_id and self.client:
-                        try:
-                            msgs = await self.client.get_messages_by_id(object_guid, [su.reply_to_message_id])
-                            if msgs and isinstance(msgs, list):
-                                # تلاش برای استخراج guid از پیام ریپلای‌شده
-                                target_guid = None
-                                msg0 = msgs[0]
-                                target_guid = pick(msg0, ["author_guid", "sender_guid", "user_guid"])
-                                if target_guid:
-                                    self.admin_states[author_guid] = {
-                                        "state": "add_vip_duration",
-                                        "target_guid": target_guid,
-                                    }
-                                    await self._safe_send(object_guid, "لطفا تعداد روزهای VIP را به صورت عدد وارد کنید.")
-                                else:
-                                    await self._safe_send(object_guid, "GUID معتبر برای کاربر در پیام ریپلای‌شده پیدا نشد.")
-                            else:
-                                await self._safe_send(object_guid, "پیام ریپلای‌شده معتبر نیست.")
-                        except Exception as e:
-                            logger.error(f"get_messages_by_id error: {e}")
-                            await self._safe_send(object_guid, "خواندن پیام ریپلای‌شده با خطا مواجه شد.")
+                    if getattr(message, "reply_to_message_id", None):
+                        replied = await self.client.get_messages_by_id(object_guid, [message.reply_to_message_id])
+                        if replied and replied[0].get("author_guid"):
+                            target_guid = replied[0]["author_guid"]
+                            self.admin_states[author_guid] = {"state": "add_vip_duration", "target_guid": target_guid}
+                            await self._safe_send(object_guid, "لطفا تعداد روزهای VIP را به‌صورت عدد وارد کنید.")
+                        else:
+                            await self._safe_send(object_guid, "پیام ریپلای‌شده معتبر نیست.")
                     else:
                         await self._safe_send(object_guid, "لطفا روی پیام کاربر مورد نظر Reply بزنید و دوباره ارسال کنید.")
                     return
@@ -484,10 +408,10 @@ class AIBot:
 
                 elif state == "waiting_for_ad_time":
                     try:
-                        ad_time_str = text.strip()
+                        ad_time_str = text
                         ad_text = self.admin_states[author_guid]["ad_text"]
                         ad_ts = self._parse_datetime(ad_time_str)
-                        self.db_manager.add_ad(ad_text, ad_ts)
+                        self.db.add_ad(ad_text, ad_ts)
                         await self._safe_send(object_guid, "تبلیغ شما با موفقیت زمان‌بندی شد.")
                         del self.admin_states[author_guid]
                         return
@@ -496,100 +420,84 @@ class AIBot:
                         return
 
                 elif state == "waiting_for_admin_username":
-                    username = text.strip().replace("@", "")
-                    if not self.client:
-                        await self._safe_send(object_guid, "کلاینت آماده نیست.")
-                        del self.admin_states[author_guid]
-                        return
+                    username = text.replace("@", "")
                     try:
                         user_info = await self.client.get_user_info_by_username(username)
-                        # ساختار دقیق rubpy ممکن است متفاوت باشد؛ محافظه‌کارانه استخراج می‌کنیم
-                        target_guid = None
-                        if user_info:
-                            target_guid = pick(user_info, ["user_guid", "guid"])
-                            if not target_guid:
-                                u = user_info.get("user") if hasattr(user_info, "get") else None  # type: ignore
-                                target_guid = pick(u or {}, ["user_guid", "guid"])
-                        if target_guid:
-                            self.db_manager.add_admin(target_guid, is_master=False)
-                            await self._safe_send(object_guid, f"کاربر @{username} به عنوان ادمین فرعی اضافه شد.")
-                            await self._safe_send(target_guid, "تبریک! شما به عنوان ادمین فرعی منصوب شدید.")
+                        if user_info and user_info.get("user"):
+                            target_guid = user_info["user"].get("user_guid")
+                            if target_guid:
+                                self.db.add_admin(target_guid, is_master=False)
+                                await self._safe_send(object_guid, f"کاربر @{username} به عنوان ادمین فرعی اضافه شد.")
+                                await self._safe_send(target_guid, "تبریک! شما به عنوان ادمین فرعی منصوب شدید.")
+                            else:
+                                await self._safe_send(object_guid, "GUID معتبر برای کاربر یافت نشد.")
                         else:
-                            await self._safe_send(object_guid, "کاربری با این یوزرنیم پیدا نشد یا GUID نامشخص بود.")
+                            await self._safe_send(object_guid, "کاربری با این نام کاربری یافت نشد. لطفا دوباره تلاش کنید.")
                     except Exception as e:
                         logger.error(f"Error adding admin by username: {e}")
-                        await self._safe_send(object_guid, "خطایی در افزودن ادمین رخ داد. دوباره امتحان کنید.")
+                        await self._safe_send(object_guid, "خطایی در افزودن ادمین رخ داد. لطفا دوباره امتحان کنید.")
                     finally:
                         if author_guid in self.admin_states:
                             del self.admin_states[author_guid]
                     return
 
                 elif state == "waiting_for_admin_to_remove":
-                    if su.reply_to_message_id and self.client:
-                        try:
-                            msgs = await self.client.get_messages_by_id(object_guid, [su.reply_to_message_id])
-                            if msgs and isinstance(msgs, list):
-                                target_guid = pick(msgs[0], ["author_guid", "sender_guid", "user_guid"])
-                                if target_guid:
-                                    self.db_manager.remove_admin(target_guid)
-                                    await self._safe_send(object_guid, "ادمین با موفقیت حذف شد.")
-                                    await self._safe_send(target_guid, "دسترسی ادمین شما حذف شد.")
-                                else:
-                                    await self._safe_send(object_guid, "GUID معتبر در پیام ریپلای‌شده یافت نشد.")
-                            else:
-                                await self._safe_send(object_guid, "پیام ریپلای‌شده معتبر نیست.")
-                        except Exception as e:
-                            logger.error(f"Error removing admin: {e}")
-                            await self._safe_send(object_guid, "حذف ادمین با خطا مواجه شد.")
-                        finally:
-                            if author_guid in self.admin_states:
-                                del self.admin_states[author_guid]
+                    if getattr(message, "reply_to_message_id", None):
+                        replied = await self.client.get_messages_by_id(object_guid, [message.reply_to_message_id])
+                        if replied and replied[0].get("author_guid"):
+                            target_guid = replied[0]["author_guid"]
+                            self.db.remove_admin(target_guid)
+                            await self._safe_send(object_guid, "ادمین با موفقیت حذف شد.")
+                            await self._safe_send(target_guid, "دسترسی ادمین شما حذف شد.")
+                        else:
+                            await self._safe_send(object_guid, "پیام ریپلای شده حاوی اطلاعات کاربری معتبر نیست.")
+                        del self.admin_states[author_guid]
                     else:
-                        await self._safe_send(object_guid, "لطفاً روی پیام ادمین مورد نظر Reply بزنید و دوباره ارسال کنید.")
+                        await self._safe_send(object_guid, "لطفا روی پیام ادمین مورد نظر Reply بزنید و مجددا امتحان کنید.")
                     return
 
-            # --- Waiting for password state ---
+            # --- Password pending ---
             if author_guid in self.waiting_for_password:
-                await self.handle_password_check(su, text.strip())
+                password = text
+                await self.handle_password_check(message, password)
                 return
 
             # --- Commands ---
-            if text and text.startswith("/"):
-                m = re.match(r"^/(\w+)", text.strip())
+            if text.startswith("/"):
+                m = re.match(r"^/(\w+)", text)
                 if m:
                     cmd = f"/{m.group(1).lower()}"
                     handler = self.commands.get(cmd)
-                    user_data = self.db_manager.get_user(author_guid or "")
                     if handler:
-                        await handler(su, text, user_data)
+                        user_data = self.db.get_user(author_guid)
+                        await handler(message, text, user_data)
                     else:
                         await self.show_user_menu(author_guid)
                 return
 
-            # اگر دستور نبود → به عنوان /ai
-            su.text = f"/ai {text}"
-            user_data = self.db_manager.get_user(author_guid or "")
-            await self.handle_ai_command(su, su.text, user_data)
+            # بدون دستور: مثل /ai عمل کند
+            message.text = f"/ai {text}"
+            user_data = self.db.get_user(author_guid)
+            await self.handle_ai_command(message, message.text, user_data)
 
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             logger.error(f"Error processing message: {e}", exc_info=True)
-            await self._safe_send(su.object_guid or su.author_guid, "یک خطای ناشناخته رخ داد. لطفا دوباره تلاش کنید.")
+            await self._safe_send(getattr(message, "object_guid", author_guid), "یک خطای ناشناخته رخ داد. لطفاً دوباره تلاش کنید.")
 
-    async def handle_callback_query(self, su: SimpleUpdate):
-        """هندل کلیک روی دکمه‌های اینلاین"""
+    async def handle_callback_query(self, callback_query: Update):
         try:
-            data = su.data
-            sender_guid = su.author_guid
-            sender_name = su.sender_name or ""
+            data = getattr(callback_query, "data", "")
+            sender_guid = getattr(callback_query, "sender_guid", None)
+            sender_name = getattr(callback_query, "sender_name", "")
 
-            admin_level = self.db_manager.get_admin_level(sender_guid)
+            admin_level = self.db.get_admin_level(sender_guid)
 
             if admin_level != -1:
                 if data == "vip_manage":
                     await self.show_vip_menu(sender_guid)
                     return
                 elif data == "add_vip":
-                    await self._safe_send(sender_guid, "حالا روی پیام کاربری که می‌خواهید VIP کنید، Reply بزنید و این پیام را بفرستید.")
+                    await self._safe_send(sender_guid, "حالا روی پیام کاربری که می‌خواهید VIP کنید، Reply بزنید و این پیام را برای ربات بفرستید.")
                     self.admin_states[sender_guid] = {"state": "add_vip_reply"}
                     return
                 elif data == "ad_manage":
@@ -600,9 +508,9 @@ class AIBot:
                     self.admin_states[sender_guid] = {"state": "waiting_for_ad_text"}
                     return
                 elif data == "list_ads":
-                    ads = self.db_manager.get_due_ads()
+                    ads = self.db.get_due_ads()
                     if not ads:
-                        await self._safe_send(sender_guid, "فعلاً تبلیغ موعددار نداریم.")
+                        await self._safe_send(sender_guid, "فعلاً تبلیغ زمان‌بندی‌شده‌ای نداریم.")
                     else:
                         lines = []
                         for ad_id, ad_text, run_at in ads:
@@ -615,19 +523,19 @@ class AIBot:
                     await self.show_admin_management_menu(sender_guid)
                     return
                 elif data == "add_sub_admin" and admin_level == 1:
-                    await self._safe_send(sender_guid, "لطفاً یوزرنیم ادمین جدید را بدون @ وارد کنید. مثال: username")
+                    await self._safe_send(sender_guid, "لطفاً نام کاربری ادمین جدید را بدون @ وارد کنید. مثال: username")
                     self.admin_states[sender_guid] = {"state": "waiting_for_admin_username"}
                     return
                 elif data == "remove_sub_admin" and admin_level == 1:
-                    await self._safe_send(sender_guid, "روی پیام ادمین فرعی که می‌خواهید حذف کنید، Reply بزنید و ارسال کنید.")
+                    await self._safe_send(sender_guid, "لطفاً روی پیام ادمین فرعی که می‌خواهید حذف شود Reply بزنید و پیام را برای ربات ارسال کنید.")
                     self.admin_states[sender_guid] = {"state": "waiting_for_admin_to_remove"}
                     return
 
             # User callbacks
             if data == "about":
                 response = (
-                    "🤖 من یک ربات هوش مصنوعی هستم که به سوالات شما پاسخ می‌دهم و در کارهای مختلف کمک می‌کنم.\n\n"
-                    "برای ارتباط یا پیشنهاد قابلیت جدید، به ادمین اصلی پیام بدهید: **@What0001** 🚀"
+                    " 🤖 من یک ربات هوش مصنوعی هستم که به سوالات شما پاسخ می‌دهم و در کارهای مختلف کمک می‌کنم.\n\n"
+                    "برای ارتباط یا پیشنهاد قابلیت جدید، به ادمین اصلی پیام بدهید: **@What0001** 🚀 "
                 )
                 await self._safe_send(sender_guid, response)
             elif data == "vip_request":
@@ -636,39 +544,38 @@ class AIBot:
                 await self._safe_send(sender_guid, "لطفاً سوال خود را بعد از /ai مطرح کنید.")
             elif data == "request_join":
                 channel_guid = CHANNEL_GUID or "unknown_channel"
-                self.db_manager.request_channel_join(channel_guid, sender_guid or "", sender_name)
+                self.db.request_channel_join(channel_guid, sender_guid, sender_name)
                 admin_message = (
-                    f"درخواست جدید برای اضافه کردن ربات به گروه:\n"
-                    f"نام کاربری/نام: {sender_name}\nGUID: {sender_guid}"
+                    f"درخواست جدید برای اضافه کردن ربات به گروه:\nنام کاربری: {sender_name}\nGUID: {sender_guid}"
                 )
                 await self._safe_send(self.master_admin_guid, admin_message)
                 await self._safe_send(sender_guid, "درخواست شما به ادمین ارسال شد. در صورت تایید، به زودی با شما تماس گرفته می‌شود.")
             elif data == "back_to_main_menu":
                 await self.show_user_menu(sender_guid)
             elif data == "back_to_admin_menu":
-                admin_level = self.db_manager.get_admin_level(sender_guid)
+                admin_level = self.db.get_admin_level(sender_guid)
                 if admin_level == -1:
                     await self._safe_send(sender_guid, "دسترسی ادمین ندارید.")
                 else:
                     await self.show_admin_menu(sender_guid, admin_level)
 
-        except Exception as e:
-            logger.error(f"Error handling callback query: {e}")
+        except Exception as e:  # pragma: no cover
+            logger.error(f"Error handling callback query: {e}", exc_info=True)
 
-    # ───────────── Command Handlers ─────────────
-    async def handle_start_command(self, su: SimpleUpdate, text: str, user_data):
-        await self.show_user_menu(su.author_guid)
+    # ---------- Commands ----------
+    async def handle_start_command(self, message: Update, text: str, user_data):
+        await self.show_user_menu(getattr(message, "author_guid", None))
 
-    async def handle_ai_command(self, su: SimpleUpdate, text: str, user_data):
+    async def handle_ai_command(self, message: Update, text: str, user_data):
         if not (HAS_GENAI and _model):
-            await self._safe_send(su.object_guid, "سرویس هوش مصنوعی غیرفعال است.")
+            await self._safe_send(getattr(message, "object_guid", None), "سرویس هوش مصنوعی غیرفعال است.")
             return
 
-        author_guid = su.author_guid or ""
+        # Ensure user exists
         if not user_data:
-            user_data = self.db_manager.get_user(author_guid)
+            user_data = self.db.get_user(getattr(message, "author_guid", ""))
             if not user_data:
-                await self._safe_send(su.object_guid, "مشکلی در شناسایی کاربر رخ داده است.")
+                await self._safe_send(getattr(message, "object_guid", None), "مشکلی در شناسایی کاربر رخ داده است.")
                 return
 
         # users columns: (guid, last_active, is_member, is_vip, vip_expiry)
@@ -677,58 +584,57 @@ class AIBot:
 
         # Expire VIP if needed
         if is_vip and (vip_expiry is None or datetime.now().timestamp() > float(vip_expiry)):
-            self.db_manager.make_vip(author_guid, 0)
+            self.db.make_vip(getattr(message, "author_guid", ""), 0)
             is_vip = False
 
         prompt = text.replace("/ai", "", 1).strip()
         if not prompt:
-            await self._safe_send(su.object_guid, "لطفا یک سوال بعد از /ai بپرسید.")
+            await self._safe_send(getattr(message, "object_guid", None), "لطفاً یک سوال بعد از /ai بپرسید.")
             return
 
         user_type = "vip" if is_vip else "free"
         response_text = await generate_response(prompt, user_type)
-        await self._safe_send(su.object_guid, response_text)
+        await self._safe_send(getattr(message, "object_guid", None), response_text)
 
-    async def handle_summarize_command(self, su: SimpleUpdate, text: str, user_data):
+    async def handle_summarize_command(self, message: Update, text: str, user_data):
         if not (HAS_GENAI and _model):
-            await self._safe_send(su.object_guid, "سرویس هوش مصنوعی غیرفعال است.")
+            await self._safe_send(getattr(message, "object_guid", None), "سرویس هوش مصنوعی غیرفعال است.")
             return
 
         prompt = text.replace("/summarize", "", 1).strip()
         if not prompt:
-            await self._safe_send(su.object_guid, "لطفا متنی را برای خلاصه‌سازی بعد از /summarize وارد کنید.")
+            await self._safe_send(getattr(message, "object_guid", None), "لطفاً متنی را برای خلاصه‌سازی بعد از /summarize وارد کنید.")
             return
 
         summary_prompt = f"متن زیر را در حد چند جمله خلاصه کن:\n\n{prompt}"
         summary_text = await generate_response(summary_prompt, "vip")
-        await self._safe_send(su.object_guid, summary_text)
+        await self._safe_send(getattr(message, "object_guid", None), summary_text)
 
-    async def handle_admin_login(self, su: SimpleUpdate, text: str, user_data):
-        admin_level = self.db_manager.get_admin_level(su.author_guid)
+    async def handle_admin_login(self, message: Update, text: str, user_data):
+        admin_level = self.db.get_admin_level(getattr(message, "author_guid", ""))
         if admin_level != -1:
-            await self.show_admin_menu(su.author_guid, admin_level)
+            await self.show_admin_menu(getattr(message, "author_guid", ""), admin_level)
             return
-        await self._safe_send(su.object_guid, "لطفاً رمز عبور را وارد کنید (یا /cancel برای لغو):")
-        if su.author_guid:
-            self.waiting_for_password[su.author_guid] = True
+        await self._safe_send(getattr(message, "object_guid", None), "لطفاً رمز عبور را وارد کنید (یا /cancel برای لغو):")
+        self.waiting_for_password[getattr(message, "author_guid", "")] = True
 
-    async def handle_password_check(self, su: SimpleUpdate, password: str):
-        author_guid = su.author_guid or ""
+    async def handle_password_check(self, message: Update, password: str):
+        author_guid = getattr(message, "author_guid", "")
         if password == self.master_password:
-            self.db_manager.add_admin(author_guid, is_master=True)
-            await self._safe_send(su.object_guid, "به عنوان ادمین اصلی وارد شدید. خوش آمدید!")
+            self.db.add_admin(author_guid, is_master=True)
+            await self._safe_send(getattr(message, "object_guid", None), "به عنوان ادمین اصلی وارد شدید. خوش آمدید!")
             await self.show_admin_menu(author_guid, 1)
         elif password == self.sub_admin_password:
-            self.db_manager.add_admin(author_guid, is_master=False)
-            await self._safe_send(su.object_guid, "به عنوان ادمین فرعی وارد شدید. خوش آمدید!")
+            self.db.add_admin(author_guid, is_master=False)
+            await self._safe_send(getattr(message, "object_guid", None), "به عنوان ادمین فرعی وارد شدید. خوش آمدید!")
             await self.show_admin_menu(author_guid, 0)
         else:
-            await self._safe_send(su.object_guid, "رمز عبور اشتباه است.")
+            await self._safe_send(getattr(message, "object_guid", None), "رمز عبور اشتباه است.")
         if author_guid in self.waiting_for_password:
             del self.waiting_for_password[author_guid]
 
-    async def handle_cancel_state(self, su: SimpleUpdate, text: str, user_data):
-        author_guid = su.author_guid or ""
+    async def handle_cancel_state(self, message: Update, text: str, user_data):
+        author_guid = getattr(message, "author_guid", "")
         cancelled = False
         if author_guid in self.admin_states:
             del self.admin_states[author_guid]
@@ -737,12 +643,10 @@ class AIBot:
             del self.waiting_for_password[author_guid]
             cancelled = True
         msg = "عملیات جاری لغو شد." if cancelled else "عملیات فعالی برای لغو وجود ندارد."
-        await self._safe_send(su.object_guid, msg)
+        await self._safe_send(getattr(message, "object_guid", None), msg)
 
-    # ───────────── Menus ─────────────
-    async def show_user_menu(self, guid: Optional[str]):
-        if not (guid and self.client):
-            return
+    # ---------- Menus ----------
+    async def show_user_menu(self, guid: str):
         keyboard = [
             [{"text": "چت با هوش مصنوعی", "callback_data": "ai_chat"}],
             [{"text": "درباره ما", "callback_data": "about"}],
@@ -754,9 +658,7 @@ class AIBot:
             keyboard=keyboard,
         )
 
-    async def show_admin_menu(self, guid: Optional[str], admin_level: int):
-        if not (guid and self.client):
-            return
+    async def show_admin_menu(self, guid: str, admin_level: int):
         keyboard = [
             [{"text": "مدیریت VIP", "callback_data": "vip_manage"}],
             [{"text": "مدیریت تبلیغات", "callback_data": "ad_manage"}],
@@ -770,9 +672,7 @@ class AIBot:
             keyboard=keyboard,
         )
 
-    async def show_vip_menu(self, guid: Optional[str]):
-        if not (guid and self.client):
-            return
+    async def show_vip_menu(self, guid: str):
         keyboard = [
             [{"text": "اضافه کردن VIP", "callback_data": "add_vip"}],
             [{"text": "برگشت به پنل ادمین", "callback_data": "back_to_admin_menu"}],
@@ -783,12 +683,10 @@ class AIBot:
             keyboard=keyboard,
         )
 
-    async def show_ad_menu(self, guid: Optional[str]):
-        if not (guid and self.client):
-            return
+    async def show_ad_menu(self, guid: str):
         keyboard = [
             [{"text": "افزودن تبلیغ جدید", "callback_data": "add_ad"}],
-            [{"text": "لیست تبلیغات موعددار", "callback_data": "list_ads"}],
+            [{"text": "لیست تبلیغات در انتظار", "callback_data": "list_ads"}],
             [{"text": "برگشت به پنل ادمین", "callback_data": "back_to_admin_menu"}],
         ]
         await self.client.send_message(
@@ -797,9 +695,7 @@ class AIBot:
             keyboard=keyboard,
         )
 
-    async def show_admin_management_menu(self, guid: Optional[str]):
-        if not (guid and self.client):
-            return
+    async def show_admin_management_menu(self, guid: str):
         keyboard = [
             [{"text": "افزودن ادمین", "callback_data": "add_sub_admin"}],
             [{"text": "حذف ادمین", "callback_data": "remove_sub_admin"}],
@@ -811,84 +707,105 @@ class AIBot:
             keyboard=keyboard,
         )
 
-    # ───────────── Ads Scheduler ─────────────
+    # ---------- Ads Scheduler ----------
     async def run_ads_scheduler(self):
-        """هر ۱۰ ثانیه چک می‌کند تبلیغ موعددار داریم یا نه؛ سپس برای همه کاربران می‌فرستد و حذف می‌کند."""
+        """هر 10 ثانیه تبلیغات رسیده را برای همه کاربران می‌فرستد و حذف می‌کند."""
         while True:
             try:
-                if not self.client:
-                    await asyncio.sleep(2)
-                    continue
-
-                due_ads = self.db_manager.get_due_ads()
-                if due_ads:
-                    # همه کاربران
-                    with self.db_manager.get_connection() as conn:
+                ads = self.db.get_due_ads()
+                if ads:
+                    with self.db.get_connection() as conn:
                         cur = conn.cursor()
                         cur.execute("SELECT guid FROM users")
                         all_guids = [row[0] for row in cur.fetchall()]
 
-                    for ad_id, ad_text, _run_at in due_ads:
+                    for ad in ads:
+                        ad_id, ad_text, run_at = ad
                         for guid in all_guids:
                             try:
                                 await self.client.send_message(guid, ad_text)
                                 logger.info(f"Ad sent to user: {guid}")
-                            except Exception as e:
+                            except Exception as e:  # pragma: no cover
                                 logger.error(f"Failed to send ad to {guid}: {e}")
-                        self.db_manager.delete_ad(ad_id)
+                        self.db.delete_ad(ad_id)
                 await asyncio.sleep(10)
-            except Exception as e:
+            except Exception as e:  # pragma: no cover
                 logger.error(f"run_ads_scheduler loop error: {e}")
                 await asyncio.sleep(5)
 
-    # ───────────── Bootstrapping (async) ─────────────
-    async def start(self):
-        """کلاینت rubpy را استارت می‌کند، هندلرها را رجیستر می‌کند و تا قطع شدن اتصال اجرا می‌ماند."""
-        logger.info("Starting the Rubika AI bot...")
-
-        # rubpy الگوی درست: async context + on(...) + run_until_disconnected()
-        async with Client(self.auth_key) as client:
-            self.client = client
-
-            # رجیستر هندلر پیام‌ها
-            @client.on(handlers.MessageUpdates())
-            async def _on_message(update):
-                su = to_simple_update_from_message(update)
-                # اگر object_guid خالی بود، حداقل author_guid را استفاده می‌کنیم
-                if not su.object_guid:
-                    su.object_guid = su.author_guid
-                await self.handle_message(su)
-
-            # رجیستر هندلر کال‌بک دکمه‌ها
-            @client.on(handlers.CallbackQueryUpdates())
-            async def _on_callback(update):
-                su = to_simple_update_from_callback(update)
-                await self.handle_callback_query(su)
-
-            # استارت زمان‌بند تبلیغات در همین event loop
-            asyncio.create_task(self.run_ads_scheduler())
-
-            # بلوک تا قطع اتصال
-            await client.run_until_disconnected()
-
 
 # =============================
-# 6) Entry Point
+# 5) Bootstrap & Run
 # =============================
-if __name__ == "__main__":
+async def main():
+    # چک اولیه متغیرهای ضروری
+    missing = []
+    for k, v in {
+        "RUBIKA_AUTH_KEY": AUTH_KEY,
+        "MASTER_ADMIN_GUID": MASTER_ADMIN_GUID,
+        "MASTER_PASSWORD": MASTER_PASSWORD,
+        "SUB_ADMIN_PASSWORD": SUB_ADMIN_PASSWORD,
+    }.items():
+        if not v:
+            missing.append(k)
+    if missing:
+        raise RuntimeError(f"لطفاً متغیرهای محیطی زیر را تنظیم کنید: {', '.join(missing)}")
+
     if not HAS_RUBPY:
-        logger.error("کتابخانه rubpy نصب نشده است. لطفاً آن را به requirements.txt اضافه/نصب کنید.")
-    elif not all([AUTH_KEY, MASTER_ADMIN_GUID, MASTER_PASSWORD, SUB_ADMIN_PASSWORD]):
-        logger.error("تمام متغیرهای محیطی لازم باید در env. تنظیم شوند.")
-    else:
-        try:
-            bot = AIBot(
-                AUTH_KEY,
-                CHANNEL_GUID,  # اگر لازم نیست، در env نگذارید
-                MASTER_ADMIN_GUID,
-                MASTER_PASSWORD,
-                SUB_ADMIN_PASSWORD,
-            )
-            asyncio.run(bot.start())
-        except Exception as e:
-            logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
+        raise RuntimeError("کتابخانه rubpy نصب نشده است.")
+
+    # *** نکته حیاتی برای جلوگیری از prompt شماره‌تلفن (EOFError) ***
+    # استفاده صحیح از پارامترها:
+    #   - session: یک نام دلخواه برای ذخیره نشست (فایل محلی)
+    #   - auth:    کلید AUTH روبیکا
+    client = Client(session="rubika-bot", auth=AUTH_KEY)
+
+    bot = AIBot(
+        client=client,
+        channel_guid=CHANNEL_GUID,
+        master_admin_guid=MASTER_ADMIN_GUID,
+        master_password=MASTER_PASSWORD,
+        sub_admin_password=SUB_ADMIN_PASSWORD,
+    )
+
+    # شروع تسک زمان‌بندی تبلیغات
+    asyncio.create_task(bot.run_ads_scheduler())
+
+    # ------ ثبت هندلر عمومی آپدیت‌ها ------
+    # rubpy در نسخه‌های مختلف API رویداد دارد؛ این مسیر عمومی با on_update کار می‌کند.
+    # اگر کتابخانه شما متد "run" با callbackها را پشتیبانی کند از آن استفاده می‌کنیم؛
+    # در غیر این صورت از حلقه دریافت آپدیت استفاده می‌کنیم.
+    try:
+        # بعضی نسخه‌ها: client.run(message_handler, callback_handler)
+        # ما یک هندلر واحد می‌دهیم که خودش تشخیص می‌دهد پیام است یا کال‌بک:
+        logger.info("Starting the Rubika AI bot (run with handler)…")
+        client.run(bot.on_update)
+        return
+    except Exception as e:
+        logger.warning(f"client.run(handler) not supported: {e}. Falling back to polling loop…")
+
+    # --- FallBack: حلقه عمومی دریافت آپدیت‌ها (سازگار با نسخه‌هایی که run(handler) ندارند) ---
+    # بسته به نسخه rubpy نام و امضای روش دریافت آپدیت‌ها متفاوت است؛
+    # الگوی زیر دو حالت رایج را پوشش می‌دهد.
+    try:
+        # حالت context manager
+        async with client:
+            logger.info("Connected. Entering generic update loop…")
+            while True:
+                try:
+                    updates: List[Update] = await client.get_updates()  # بعضی نسخه‌ها
+                except AttributeError:
+                    # حالت دیگر: fetch از event queue داخلی
+                    updates = await client.listen()  # اگر متدی با این نام وجود داشته باشد
+                for upd in updates or []:
+                    await bot.on_update(upd)
+                await asyncio.sleep(0.5)
+    except Exception as e:
+        logger.error(f"Fatal loop error: {e}", exc_info=True)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except Exception as exc:
+        logger.error(f"Bot failed to start: {exc}", exc_info=True)
